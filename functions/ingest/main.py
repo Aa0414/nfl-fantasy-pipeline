@@ -1,3 +1,4 @@
+import time
 import os, json, requests, feedparser, datetime as dt
 import functions_framework
 from google.cloud import storage
@@ -21,14 +22,7 @@ def current_season():
     return int(requests.get("https://api.sleeper.app/v1/state/nfl", timeout=20).json()["season"])
 
 # ---------- jobs ----------
-TEAMS = ["Arizona Cardinals","Atlanta Falcons","Baltimore Ravens","Buffalo Bills",
-         "Carolina Panthers","Chicago Bears","Cincinnati Bengals","Cleveland Browns",
-         "Dallas Cowboys","Denver Broncos","Detroit Lions","Green Bay Packers",
-         "Houston Texans","Indianapolis Colts","Jacksonville Jaguars","Kansas City Chiefs",
-         "Las Vegas Raiders","Los Angeles Chargers","Los Angeles Rams","Miami Dolphins",
-         "Minnesota Vikings","New England Patriots","New Orleans Saints","New York Giants",
-         "New York Jets","Philadelphia Eagles","Pittsburgh Steelers","San Francisco 49ers",
-         "Seattle Seahawks","Tampa Bay Buccaneers","Tennessee Titans","Washington Commanders"]
+
 
 def job_news(bucket, now, log):
     day, stamp = now.strftime("%Y-%m-%d"), now.strftime("%H-%M")
@@ -48,19 +42,34 @@ def job_news(bucket, now, log):
     except Exception as e:
         log.append(f"espn failed: {e}")
 
-    # Google News: one query per team, last 24 hours
-    rows = []
-    for team in TEAMS:
+    
+    # Google News: a few broad searches (32 per-team searches got blocked)
+    QUERIES = {
+        "nfl":      "NFL when:1d",
+        "injury":   "NFL injury when:1d",
+        "fantasy":  "fantasy football when:1d",
+        "depth":    "NFL starter OR benched OR promoted when:1d",
+    }
+    rows, statuses = [], {}
+    for label, q in QUERIES.items():
+        url = ("https://news.google.com/rss/search?q=" + requests.utils.quote(q)
+               + "&hl=en-US&gl=US&ceid=US:en")
         try:
-            url = ("https://news.google.com/rss/search?q=" + requests.utils.quote(f'"{team}" when:1d')
-                   + "&hl=en-US&gl=US&ceid=US:en")
-            feed = feedparser.parse(requests.get(url, headers=HEADERS, timeout=20).content)
-            rows += [{"title": e.get("title"), "link": e.get("link"),
-                      "published": e.get("published"), "query_team": team,
-                      "source": "google", "ingested_at": now.isoformat()} for e in feed.entries]
+            resp = requests.get(url, headers=HEADERS, timeout=10)
+            statuses[label] = resp.status_code
+            entries = feedparser.parse(resp.content).entries if resp.status_code == 200 else []
         except Exception as e:
-            log.append(f"google {team} failed: {e}")
-    if rows: upload(bucket, f"news/google/dt={day}/{stamp}.ndjson", rows, log)
+            statuses[label] = f"error: {e.__class__.__name__}"
+            entries = []
+        rows += [{"title": e.get("title"), "link": e.get("link"),
+                  "published": e.get("published"), "query": label,
+                  "source": "google", "ingested_at": now.isoformat()} for e in entries]
+        time.sleep(2)
+    log.append(f"google: {len(rows)} rows, statuses {statuses}")
+    if rows:
+        upload(bucket, f"news/google/dt={day}/{stamp}.ndjson", rows, log)
+    else:
+        raise RuntimeError(f"google returned 0 rows (statuses {statuses})")
 
     # Yahoo
     try:
