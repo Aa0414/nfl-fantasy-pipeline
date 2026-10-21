@@ -1,6 +1,0 @@
-functions-framework
-google-cloud-storage
-requests
-feedparser
-nflreadpy
-polars
