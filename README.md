@@ -43,12 +43,19 @@ Google BigQuery is the target analytics warehouse, with separate raw, staging, a
 - **Raw Storage:** Google Cloud Storage
 - **Orchestration:** Apache Airflow / Astronomer (planned integration)
 - **Data Warehouse:** Google BigQuery
-- **Analytics & Visualization:** Looker Studio (planned)
+- **Analytics & Visualization:** Looker Studio (Phase 1 dashboard)
 - **Version Control:** GitHub
 - **Project Management:** GitHub Projects
 
 ## Project Status
 
 Phase 1 focuses on deploying the ingestion infrastructure, developing warehouse models, orchestrating scheduled updates, and establishing initial reporting capabilities.
+
+## Phase 1 Reporting and Analysis
+
+- [Looker Studio dashboard](https://datastudio.google.com/u/0/reporting/70217ab0-fbb8-4f78-ae76-9bb69a1001a3/page/hKqBG/edit) (access depends on the report's sharing settings). It shows headline volume by source, matched-headline and player coverage, the latest news ingestion time, and a separate Week 6 fantasy-points view.
+- Runnable BigQuery queries are in [`sql/analysis/`](sql/analysis/): source-level match rate, most-mentioned players, and Week 6 PPR performance versus each player's prior-three-game baseline. The first two use a fixed October 19–21, 2026 UTC snapshot so their results can be compared with the Phase 1 dashboard; change the date bounds to analyze a later window.
+
+The Week 6 points view is descriptive. Because news collection began in October, earlier weeks do not have a complete pregame news window. A buzz-versus-points comparison should wait until `mart.fact_player_week.news_coverage = 'full'` for the weeks being analyzed.
 
 Future phases will extend this foundation toward machine learning predictions and NLP-based analysis of NFL news.
