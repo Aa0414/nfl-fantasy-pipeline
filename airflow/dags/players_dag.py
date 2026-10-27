@@ -29,6 +29,25 @@ SQL_DIR = Path("/usr/local/airflow/include/sql")
 )
 def players_pipeline():
 
+    @task(retries=2)
+    def trigger_players():
+        """Trigger Sleeper player ingestion via Cloud Function."""
+        import requests
+        from google.auth.transport.requests import Request
+        from google.oauth2 import id_token
+
+        url = "https://nfl-ingest-cedewu2pea-uc.a.run.app"
+        token = id_token.fetch_id_token(Request(), url)
+
+        response = requests.get(
+            url,
+            params={"job": "players"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=300,
+        )
+        response.raise_for_status()
+        print("Sleeper player ingestion completed")
+
     @task
     def find_latest_snapshot():
         client = storage.Client(project=PROJECT)
@@ -101,12 +120,13 @@ def players_pipeline():
             if count == 0:
                 raise ValueError(f"Empty table: {table}")
 
+    extraction = trigger_players()
     snapshot = find_latest_snapshot()
     loaded = load_players_raw(snapshot)
     refreshed = refresh_players_tables()
     verified = verify_players()
 
-    loaded >> refreshed >> verified
+    extraction >> snapshot >> loaded >> refreshed >> verified
 
 
 players_pipeline()
