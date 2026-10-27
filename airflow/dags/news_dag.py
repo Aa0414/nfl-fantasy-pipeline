@@ -38,6 +38,28 @@ SOURCES = {
 def nfl_daily_news():
 
     @task
+    def trigger_news():
+        """Trigger the existing news ingestion Cloud Function."""
+        import requests
+        from google.auth.transport.requests import Request
+        from google.oauth2 import id_token
+
+        url = "https://nfl-ingest-cedewu2pea-uc.a.run.app"
+
+        token = id_token.fetch_id_token(Request(), url)
+
+        response = requests.get(
+            url,
+            params={"job": "news"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=300,
+        )
+        response.raise_for_status()
+
+        print("News extraction completed")
+        print(response.text[:1000])
+
+    @task
     def load_news_raw():
         from google.cloud import storage, bigquery
 
@@ -242,12 +264,13 @@ def nfl_daily_news():
                     f"Empty table: {table}"
                 )
 
+    extraction = trigger_news()
     raw = load_news_raw()
     staging = refresh_news_staging()
     mart = refresh_news_mart()
     verify = verify_news()
 
-    raw >> staging >> mart >> verify
+    extraction >> raw >> staging >> mart >> verify
 
 
 nfl_daily_news()
