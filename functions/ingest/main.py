@@ -24,63 +24,73 @@ def current_season():
 # ---------- jobs ----------
 
 
-def job_news(bucket, now, log):
+def job_news(bucket, now, log, source=None):
     day, stamp = now.strftime("%Y-%m-%d"), now.strftime("%H-%M")
 
-    # ESPN (bigger pull since we only run daily)
-    try:
-        arts = requests.get("https://site.api.espn.com/apis/site/v2/sports/football/nfl/news",
-                            params={"limit": 200}, headers=HEADERS, timeout=30).json().get("articles", [])
-        rows = [{"title": a.get("headline"), "description": a.get("description"),
-                 "link": a.get("links", {}).get("web", {}).get("href"),
-                 "published": a.get("published"),
-                 "tags": [{"type": c.get("type"), "label": c.get("description"),
-                           "athlete_id": c.get("athleteId"), "team_id": c.get("teamId")}
-                          for c in a.get("categories", [])],
-                 "source": "espn", "ingested_at": now.isoformat()} for a in arts]
-        if rows: upload(bucket, f"news/espn/dt={day}/{stamp}.ndjson", rows, log)
-    except Exception as e:
-        log.append(f"espn failed: {e}")
-
-    
-    # Google News: a few broad searches (32 per-team searches got blocked)
-    QUERIES = {
-        "nfl":      "NFL when:1d",
-        "injury":   "NFL injury when:1d",
-        "fantasy":  "fantasy football when:1d",
-        "depth":    "NFL starter OR benched OR promoted when:1d",
-    }
-    rows, statuses = [], {}
-    for label, q in QUERIES.items():
-        url = ("https://news.google.com/rss/search?q=" + requests.utils.quote(q)
-               + "&hl=en-US&gl=US&ceid=US:en")
+    if source in (None, "espn"):
+        # ESPN (bigger pull since we only run daily)
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=10)
-            statuses[label] = resp.status_code
-            entries = feedparser.parse(resp.content).entries if resp.status_code == 200 else []
+            arts = requests.get("https://site.api.espn.com/apis/site/v2/sports/football/nfl/news",
+                                params={"limit": 200}, headers=HEADERS, timeout=30).json().get("articles", [])
+            rows = [{"title": a.get("headline"), "description": a.get("description"),
+                     "link": a.get("links", {}).get("web", {}).get("href"),
+                     "published": a.get("published"),
+                     "tags": [{"type": c.get("type"), "label": c.get("description"),
+                               "athlete_id": c.get("athleteId"), "team_id": c.get("teamId")}
+                              for c in a.get("categories", [])],
+                     "source": "espn", "ingested_at": now.isoformat()} for a in arts]
+            if not rows:
+                raise RuntimeError("ESPN returned 0 rows")
+            upload(bucket, f"news/espn/dt={day}/{stamp}.ndjson", rows, log)
         except Exception as e:
-            statuses[label] = f"error: {e.__class__.__name__}"
-            entries = []
-        rows += [{"title": e.get("title"), "link": e.get("link"),
-                  "published": e.get("published"), "query": label,
-                  "source": "google", "ingested_at": now.isoformat()} for e in entries]
-        time.sleep(2)
-    log.append(f"google: {len(rows)} rows, statuses {statuses}")
-    if rows:
-        upload(bucket, f"news/google/dt={day}/{stamp}.ndjson", rows, log)
-    else:
-        raise RuntimeError(f"google returned 0 rows (statuses {statuses})")
+            log.append(f"espn failed: {e}")
+            if source == "espn":
+                raise
 
-    # Yahoo
-    try:
-        feed = feedparser.parse(requests.get("https://sports.yahoo.com/nfl/rss.xml",
-                                             headers=HEADERS, timeout=20).content)
-        rows = [{"title": e.get("title"), "link": e.get("link"),
-                 "published": e.get("published"), "source": "yahoo",
-                 "ingested_at": now.isoformat()} for e in feed.entries]
-        if rows: upload(bucket, f"news/yahoo/dt={day}/{stamp}.ndjson", rows, log)
-    except Exception as e:
-        log.append(f"yahoo failed: {e}")
+    if source in (None, "google"):
+        # Google News: a few broad searches (32 per-team searches got blocked)
+        QUERIES = {
+            "nfl":      "NFL when:1d",
+            "injury":   "NFL injury when:1d",
+            "fantasy":  "fantasy football when:1d",
+            "depth":    "NFL starter OR benched OR promoted when:1d",
+        }
+        rows, statuses = [], {}
+        for label, q in QUERIES.items():
+            url = ("https://news.google.com/rss/search?q=" + requests.utils.quote(q)
+                   + "&hl=en-US&gl=US&ceid=US:en")
+            try:
+                resp = requests.get(url, headers=HEADERS, timeout=10)
+                statuses[label] = resp.status_code
+                entries = feedparser.parse(resp.content).entries if resp.status_code == 200 else []
+            except Exception as e:
+                statuses[label] = f"error: {e.__class__.__name__}"
+                entries = []
+            rows += [{"title": e.get("title"), "link": e.get("link"),
+                      "published": e.get("published"), "query": label,
+                      "source": "google", "ingested_at": now.isoformat()} for e in entries]
+            time.sleep(2)
+        log.append(f"google: {len(rows)} rows, statuses {statuses}")
+        if rows:
+            upload(bucket, f"news/google/dt={day}/{stamp}.ndjson", rows, log)
+        else:
+            raise RuntimeError(f"google returned 0 rows (statuses {statuses})")
+
+    if source in (None, "yahoo"):
+        # Yahoo
+        try:
+            feed = feedparser.parse(requests.get("https://sports.yahoo.com/nfl/rss.xml",
+                                                 headers=HEADERS, timeout=20).content)
+            rows = [{"title": e.get("title"), "link": e.get("link"),
+                     "published": e.get("published"), "source": "yahoo",
+                     "ingested_at": now.isoformat()} for e in feed.entries]
+            if not rows:
+                raise RuntimeError("Yahoo returned 0 rows")
+            upload(bucket, f"news/yahoo/dt={day}/{stamp}.ndjson", rows, log)
+        except Exception as e:
+            log.append(f"yahoo failed: {e}")
+            if source == "yahoo":
+                raise
 
 def job_players(bucket, now, log):
     players = requests.get("https://api.sleeper.app/v1/players/nfl",
@@ -113,7 +123,13 @@ def run(request):
     now = dt.datetime.now(dt.timezone.utc)
     log = [f"job={job}"]
     try:
-        JOBS[job](bucket, now, log)
+        if job == "news":
+            source = request.args.get("source")
+            if source not in (None, "espn", "google", "yahoo"):
+                return f"unknown news source: {source}", 400
+            job_news(bucket, now, log, source=source)
+        else:
+            JOBS[job](bucket, now, log)
     except Exception as e:
         log.append(f"{job} failed: {e}")
         print("\n".join(log))
