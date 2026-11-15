@@ -1,23 +1,39 @@
+-- ESPN + Google + Yahoo headlines, deduped by link, timestamps in UTC
 with unioned as (
-select 'espn' as provider, cast(title as string) as title, cast(link as string) as link,
-cast(description as string) as description, cast(published as string) as published_raw,
-cast(source as string) as source, safe_cast(ingested_at as timestamp) as ingested_at
-from {{ source('raw', 'espn_news_raw') }}
-union all
-select 'google', cast(title as string), cast(link as string), cast(null as string),
-cast(published as string), cast(source as string), safe_cast(ingested_at as timestamp)
-from {{ source('raw', 'google_news_raw') }}
-union all
-select 'yahoo', cast(title as string), cast(link as string), cast(null as string),
-cast(published as string), cast(source as string), safe_cast(ingested_at as timestamp)
-from {{ source('raw', 'yahoo_news_raw') }}
+    select
+        trim(link) as link,
+        trim(title) as title,
+        trim(description) as description,
+        'espn' as source,
+        published as published_at_utc,
+        ingested_at
+    from {{ source('raw', 'espn_news_raw') }}
+
+    union all
+
+    select
+        trim(link),
+        trim(title),
+        cast(null as string),
+        'google',
+        safe.parse_timestamp('%a, %d %b %Y %H:%M:%S %z', replace(trim(published), ' GMT', ' +0000')),
+        safe_cast(ingested_at as timestamp)
+    from {{ source('raw', 'google_news_raw') }}
+
+    union all
+
+    select
+        trim(link),
+        trim(title),
+        cast(null as string),
+        'yahoo',
+        safe.parse_timestamp('%a, %d %b %Y %H:%M:%S %z', replace(trim(published), ' GMT', ' +0000')),
+        ingested_at
+    from {{ source('raw', 'yahoo_news_raw') }}
 )
-select
-to_hex(md5(link)) as headline_id,
-provider, title, description, link, source,
-coalesce(safe_cast(published_raw as timestamp),
-safe.parse_timestamp('%a, %d %b %Y %H:%M:%S %Z', published_raw)) as published_at,
-ingested_at
+
+select *
 from unioned
 where link is not null
-qualify row_number() over (partition by link order by ingested_at) = 1
+  and title is not null
+qualify row_number() over (partition by link order by ingested_at desc) = 1

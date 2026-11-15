@@ -1,0 +1,31 @@
+version: 2
+models:
+  - name: int_player_sleeper_match
+    description: Links each stats player to Sleeper, by gsis_id first and name+team as fallback
+    columns:
+      - name: player_id
+        data_tests: [unique, not_null]
+      - name: sleeper_match_method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['gsis_id', 'name_team', 'unmatched']
+
+  - name: int_headline_player_matches
+    description: Headline-to-player matches with method and confidence
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [headline_key, player_id]
+    columns:
+      - name: match_method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['espn_tag', 'name_in_title']
+      - name: match_confidence
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1

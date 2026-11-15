@@ -1,0 +1,14 @@
+version: 2
+exposures:
+  - name: fantasy_points_model
+    label: Headlines vs fantasy points model
+    type: ml
+    maturity: medium
+    description: >
+      Phase 2 model relating pregame news coverage to players' fantasy
+      performance vs their 3-game baseline.
+    depends_on:
+      - ref('fact_player_week')
+      - ref('dim_player')
+    owner:
+      name: BA882 Team 03

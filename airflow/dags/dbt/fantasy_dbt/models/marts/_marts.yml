@@ -1,0 +1,103 @@
+version: 2
+models:
+  - name: dim_player
+    description: One row per player seen in weekly stats, enriched with Sleeper info
+    columns:
+      - name: player_id
+        description: NFL gsis id
+        data_tests: [unique, not_null]
+      - name: position
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['QB', 'RB', 'WR', 'TE']
+      - name: sleeper_match_method
+        description: How the Sleeper record was linked (gsis_id, name_team, unmatched)
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['gsis_id', 'name_team', 'unmatched']
+
+  - name: dim_game
+    description: One row per NFL game
+    columns:
+      - name: game_id
+        data_tests: [unique, not_null]
+      - name: home_team
+        data_tests: [not_null]
+      - name: away_team
+        data_tests: [not_null]
+
+  - name: fact_headline
+    description: One row per unique headline
+    columns:
+      - name: headline_key
+        data_tests: [unique, not_null]
+      - name: link
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['espn', 'google', 'yahoo']
+
+  - name: bridge_headline_player
+    description: Links headlines to players with matching methods and confidence scores
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [headline_key, player_id]
+    columns:
+      - name: headline_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fact_headline')
+                field: headline_key
+      - name: player_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_player')
+                field: player_id
+      - name: match_method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['espn_tag', 'name_in_title']
+
+  - name: fact_player_week
+    description: Weekly fantasy performance, 3-game baselines, and pregame headline counts (model training table)
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [player_id, game_id]
+    columns:
+      - name: player_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_player')
+                field: player_id
+      - name: game_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_game')
+                field: game_id
+      - name: news_coverage
+        description: none / partial / full - how much of the 7 pre-game days had news collection running
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['none', 'partial', 'full']
+      - name: headline_count_pre_game
+        description: Headlines about the player in the 7 days before kickoff (NULL if no news coverage)
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0

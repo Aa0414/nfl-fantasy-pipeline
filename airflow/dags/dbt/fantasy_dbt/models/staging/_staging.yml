@@ -1,14 +1,82 @@
 version: 2
 models:
   - name: stg_headlines
+    description: ESPN + Google + Yahoo headlines, deduped by link, timestamps in UTC
     columns:
-      - name: headline_id
+      - name: link
         data_tests: [unique, not_null]
+      - name: title
+        data_tests: [not_null]
+      - name: source
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['espn', 'google', 'yahoo']
+      - name: published_at_utc
+        description: NULL means the publish date could not be parsed
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+
+  - name: stg_headline_athlete_tags
+    description: One row per ESPN headline and tagged player name
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [link, label]
+    columns:
+      - name: name_norm
+        data_tests: [not_null]
+
+  - name: stg_player_week
+    description: One row per QB/RB/WR/TE per game week, with fantasy points
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [player_id, season, week]
+    columns:
+      - name: player_id
+        data_tests: [not_null]
+      - name: position
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['QB', 'RB', 'WR', 'TE']
+      - name: game_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_schedule')
+                field: game_id
+              config:
+                severity: warn
+      - name: fantasy_points_ppr
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+
   - name: stg_players
+    description: Latest Sleeper snapshot per player
     columns:
-      - name: sleeper_player_id
+      - name: sleeper_id
         data_tests: [unique, not_null]
+      - name: full_name
+        data_tests: [not_null]
+
   - name: stg_schedule
+    description: One row per game, kickoff converted to UTC
     columns:
       - name: game_id
         data_tests: [unique, not_null]
+      - name: home_team
+        data_tests: [not_null]
+      - name: away_team
+        data_tests: [not_null]
+      - name: kickoff_ts_utc
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
