@@ -1,0 +1,12 @@
+version: 2
+sources:
+  - name: raw
+    database: ba882-team03-kalshi
+    schema: raw
+    tables:
+      - name: espn_news_raw
+      - name: google_news_raw
+      - name: yahoo_news_raw
+      - name: player_week_raw
+      - name: players_sleeper_raw
+      - name: schedule_raw
