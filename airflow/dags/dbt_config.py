@@ -39,4 +39,5 @@ RENDER_CONFIG = RenderConfig(
 OPERATOR_ARGS = {
     "install_deps": True,
     "emit_datasets": False,   # we publish our own assets above
+    "queue": "dbt",           # run dbt on the A10 "dbt" worker queue (2 vCPU, 4 GiB)
 }
