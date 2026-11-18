@@ -1,15 +1,15 @@
-
-from datetime import timedelta, datetime, timezone
-from pathlib import Path
+from datetime import timedelta
 
 import pendulum
 from airflow.sdk import dag, task
+from cosmos import DbtTaskGroup
+
+from dbt_config import EXECUTION_CONFIG, PROFILE_CONFIG, PROJECT_CONFIG, RENDER_CONFIG
 
 PROJECT_ID = "ba882-team03-kalshi"
 BUCKET = "ba882-nfl-kalshi-raw"
 LOCATION = "us-central1"
 FUNCTION_URL = "https://nfl-ingest-cedewu2pea-uc.a.run.app"
-SQL_DIR = Path("/usr/local/airflow/include/sql")
 
 
 @dag(
@@ -25,7 +25,7 @@ SQL_DIR = Path("/usr/local/airflow/include/sql")
         "retries": 2,
         "retry_delay": timedelta(minutes=10),
     },
-    tags=["nfl", "stats", "bigquery"],
+    tags=["nfl", "stats", "bigquery", "dbt"],
 )
 def nfl_weekly_stats():
 
@@ -121,78 +121,23 @@ def nfl_weekly_stats():
             if count == 0:
                 raise RuntimeError(f"Empty table: {table_id}")
 
-    @task
-    def run_staging_sql():
-        from google.cloud import bigquery
-
-        client = bigquery.Client(
-            project=PROJECT_ID,
-            location=LOCATION,
-        )
-
-        files = sorted((SQL_DIR / "staging").glob("*.sql"))
-
-        if len(files) != 6:
-            raise RuntimeError(
-                f"Expected 6 staging files, found {len(files)}"
-            )
-
-        for file in files:
-            print(f"Running staging: {file.name}")
-            sql = file.read_text(encoding="utf-8")
-            client.query(sql, location=LOCATION).result()
-
-    @task
-    def run_mart_sql():
-        from google.cloud import bigquery
-
-        client = bigquery.Client(
-            project=PROJECT_ID,
-            location=LOCATION,
-        )
-
-        files = sorted((SQL_DIR / "mart").glob("*.sql"))
-
-        if len(files) != 5:
-            raise RuntimeError(
-                f"Expected 5 mart files, found {len(files)}"
-            )
-
-        for file in files:
-            print(f"Running mart: {file.name}")
-            sql = file.read_text(encoding="utf-8")
-            client.query(sql, location=LOCATION).result()
-
-    @task
-    def verify_data():
-        from google.cloud import bigquery
-
-        client = bigquery.Client(
-            project=PROJECT_ID,
-            location=LOCATION,
-        )
-
-        for table in ["dim_player", "dim_game", "fact_player_week"]:
-            table_id = f"{PROJECT_ID}.mart.{table}"
-            query = f"SELECT COUNT(*) AS n FROM `{table_id}`"
-            count = next(
-                iter(client.query(query, location=LOCATION).result())
-            ).n
-
-            print(f"{table}: {count} rows")
-
-            if count == 0:
-                raise RuntimeError(f"Empty mart table: {table}")
+    # Replaces the Phase 1 tasks run_staging_sql / run_mart_sql / verify_data.
+    # Rebuilds staging + mart and runs all dbt tests.
+    dbt_models = DbtTaskGroup(
+        group_id="dbt_models",
+        project_config=PROJECT_CONFIG,
+        profile_config=PROFILE_CONFIG,
+        execution_config=EXECUTION_CONFIG,
+        render_config=RENDER_CONFIG,
+        operator_args={"install_deps": True},
+    )
 
     ingestion = trigger_stats()
     files = find_latest_snapshot()
     load = load_stats_to_bigquery(files)
-    staging = run_staging_sql()
-    mart = run_mart_sql()
-    verify = verify_data()
 
     ingestion >> files
-    load >> staging >> mart >> verify
+    load >> dbt_models
 
 
 nfl_weekly_stats()
