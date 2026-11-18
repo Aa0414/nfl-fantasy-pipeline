@@ -15,7 +15,7 @@ RAW_STATS = Asset("bigquery://ba882-team03-kalshi/raw/stats")
 
 # ---- Cosmos
 PROJECT_CONFIG = ProjectConfig(
-    dbt_project_path=AIRFLOW_HOME / "dags" / "dbt" / "fantasy_dbt",
+    dbt_project_path=(Path(__file__).parent / "dbt" / "fantasy_dbt").absolute().as_posix(),
     install_dbt_deps=True,          # installs dbt_utils from packages.yml
 )
 
