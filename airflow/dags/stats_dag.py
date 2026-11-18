@@ -2,9 +2,8 @@ from datetime import timedelta
 
 import pendulum
 from airflow.sdk import dag, task
-from cosmos import DbtTaskGroup
 
-from dbt_config import EXECUTION_CONFIG, PROFILE_CONFIG, PROJECT_CONFIG, RENDER_CONFIG
+from dbt_config import RAW_STATS
 
 PROJECT_ID = "ba882-team03-kalshi"
 BUCKET = "ba882-nfl-kalshi-raw"
@@ -25,7 +24,7 @@ FUNCTION_URL = "https://nfl-ingest-cedewu2pea-uc.a.run.app"
         "retries": 2,
         "retry_delay": timedelta(minutes=10),
     },
-    tags=["nfl", "stats", "bigquery", "dbt"],
+    tags=["nfl", "stats", "bigquery"],
 )
 def nfl_weekly_stats():
 
@@ -84,7 +83,9 @@ def nfl_weekly_stats():
 
         return results
 
-    @task
+    # Publishes the RAW_STATS asset -> triggers nfl_dbt_build, which replaces the old
+    # run_staging_sql / run_mart_sql / verify_data tasks.
+    @task(outlets=[RAW_STATS])
     def load_stats_to_bigquery(files):
         from google.cloud import bigquery
 
@@ -121,23 +122,11 @@ def nfl_weekly_stats():
             if count == 0:
                 raise RuntimeError(f"Empty table: {table_id}")
 
-    # Replaces the Phase 1 tasks run_staging_sql / run_mart_sql / verify_data.
-    # Rebuilds staging + mart and runs all dbt tests.
-    dbt_models = DbtTaskGroup(
-        group_id="dbt_models",
-        project_config=PROJECT_CONFIG,
-        profile_config=PROFILE_CONFIG,
-        execution_config=EXECUTION_CONFIG,
-        render_config=RENDER_CONFIG,
-        operator_args={"install_deps": True},
-    )
-
     ingestion = trigger_stats()
     files = find_latest_snapshot()
     load = load_stats_to_bigquery(files)
 
     ingestion >> files
-    load >> dbt_models
 
 
 nfl_weekly_stats()

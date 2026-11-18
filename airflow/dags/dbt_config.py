@@ -1,13 +1,19 @@
-"""Shared Cosmos settings for running the fantasy_dbt project from Airflow."""
+"""Shared Cosmos settings and data assets for the NFL pipeline."""
 import os
 from pathlib import Path
 
+from airflow.sdk import Asset
 from cosmos import ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig
 from cosmos.constants import TestBehavior
 
 AIRFLOW_HOME = Path(os.environ.get("AIRFLOW_HOME", "/usr/local/airflow"))
 
-# The dbt project inside the repo: airflow/dags/dbt/fantasy_dbt
+# ---- Assets: each ingestion DAG "publishes" one; nfl_dbt_build listens to all three
+RAW_NEWS = Asset("bigquery://ba882-team03-kalshi/raw/news")
+RAW_PLAYERS = Asset("bigquery://ba882-team03-kalshi/raw/players_sleeper_raw")
+RAW_STATS = Asset("bigquery://ba882-team03-kalshi/raw/stats")
+
+# ---- Cosmos
 PROJECT_CONFIG = ProjectConfig(
     dbt_project_path=AIRFLOW_HOME / "dags" / "dbt" / "fantasy_dbt",
     install_dbt_deps=True,          # installs dbt_utils from packages.yml
@@ -29,3 +35,8 @@ EXECUTION_CONFIG = ExecutionConfig(
 RENDER_CONFIG = RenderConfig(
     test_behavior=TestBehavior.AFTER_EACH,
 )
+
+OPERATOR_ARGS = {
+    "install_deps": True,
+    "emit_datasets": False,   # we publish our own assets above
+}

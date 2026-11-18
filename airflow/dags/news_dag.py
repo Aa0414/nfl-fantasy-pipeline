@@ -3,9 +3,8 @@ from uuid import uuid4
 
 import pendulum
 from airflow.sdk import dag, task, CronTriggerTimetable
-from cosmos import DbtTaskGroup
 
-from dbt_config import EXECUTION_CONFIG, PROFILE_CONFIG, PROJECT_CONFIG, RENDER_CONFIG
+from dbt_config import RAW_NEWS
 
 PROJECT = "ba882-team03-kalshi"
 BUCKET = "ba882-nfl-kalshi-raw"
@@ -34,76 +33,76 @@ SOURCES = {
         "retries": 2,
         "retry_delay": timedelta(minutes=10),
     },
-    tags=["nfl", "news", "bigquery", "dbt"],
+    tags=["nfl", "news", "bigquery"],
 )
 def nfl_daily_news():
 
-    @task
-    def load_news_raw():
-        from google.cloud import storage, bigquery
+    def make_trigger(source):
 
-        gcs = storage.Client(project=PROJECT)
-        bq = bigquery.Client(
-            project=PROJECT,
-            location=LOCATION,
-        )
+        @task(task_id=f"trigger_{source}")
+        def trigger():
+            import re
+            import requests
+            from google.auth.transport.requests import Request
+            from google.oauth2 import id_token
 
-        results = {}
+            url = "https://nfl-ingest-cedewu2pea-uc.a.run.app"
+            token = id_token.fetch_id_token(Request(), url)
 
-        for source, table_name in SOURCES.items():
-            prefix = f"news/{source}/"
-
-            blobs = [
-                blob for blob in gcs.list_blobs(
-                    BUCKET, prefix=prefix
-                )
-                if blob.name.endswith(".ndjson")
-                and blob.size is not None
-                and blob.size > 0
-            ]
-
-            if not blobs:
-                raise RuntimeError(
-                    f"No GCS files for {source}"
-                )
-
-            uris = [
-                f"gs://{BUCKET}/{blob.name}"
-                for blob in sorted(
-                    blobs, key=lambda b: b.name
-                )
-            ]
-
-            latest_file = max(b.name for b in blobs)
-
-            print(
-                f"{source}: {len(uris)} GCS files"
+            response = requests.get(
+                url,
+                params={"job": "news", "source": source},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=300,
             )
-            print(f"Latest: {latest_file}")
+            print(response.text)
+            response.raise_for_status()
 
-            target = f"{PROJECT}.raw.{table_name}"
+            match = re.search(
+                rf"uploaded\s+(news/{re.escape(source)}/[^\s]+\.ndjson)",
+                response.text,
+            )
+            if not match:
+                raise RuntimeError(
+                    f"No new GCS file for {source}"
+                )
+
+            return f"gs://{BUCKET}/{match.group(1)}"
+
+        return trigger
+
+    def make_load(source):
+
+        @task(task_id=f"load_{source}_raw")
+        def load(gcs_uri):
+            from google.cloud import bigquery
+
+            if not gcs_uri.startswith(
+                f"gs://{BUCKET}/news/{source}/"
+            ):
+                raise ValueError("Unexpected GCS URI")
+
+            bq = bigquery.Client(
+                project=PROJECT,
+                location=LOCATION,
+            )
+
+            target = f"{PROJECT}.raw.{SOURCES[source]}"
             temp = (
                 f"{PROJECT}.raw."
                 f"_news_load_{source}_{uuid4().hex[:12]}"
             )
 
             try:
-                target_schema = bq.get_table(target).schema
-
+                schema = bq.get_table(target).schema
                 config = bigquery.LoadJobConfig(
-                    source_format=(
-                        bigquery.SourceFormat
-                        .NEWLINE_DELIMITED_JSON
-                    ),
-                    schema=target_schema,
-                    write_disposition=(
-                        bigquery.WriteDisposition
-                        .WRITE_TRUNCATE
-                    ),
+                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+                    schema=schema,
+                    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
                 )
 
                 job = bq.load_table_from_uri(
-                    uris,
+                    gcs_uri,
                     temp,
                     job_config=config,
                     location=LOCATION,
@@ -111,11 +110,8 @@ def nfl_daily_news():
                 job.result()
 
                 loaded = bq.get_table(temp).num_rows
-
                 if loaded == 0:
-                    raise RuntimeError(
-                        f"Empty News load: {source}"
-                    )
+                    raise RuntimeError(f"Empty load: {source}")
 
                 merge_sql = f"""
                 MERGE `{target}` T
@@ -123,61 +119,47 @@ def nfl_daily_news():
                     SELECT * EXCEPT(rn)
                     FROM (
                         SELECT *,
-                          ROW_NUMBER() OVER (
-                            PARTITION BY link
-                            ORDER BY SAFE_CAST(
-                              ingested_at AS TIMESTAMP
-                            ) DESC
-                          ) AS rn
+                            ROW_NUMBER() OVER (
+                                PARTITION BY link
+                                ORDER BY SAFE_CAST(
+                                    ingested_at AS TIMESTAMP
+                                ) DESC
+                            ) AS rn
                         FROM `{temp}`
                         WHERE link IS NOT NULL
                     )
                     WHERE rn = 1
                 ) S
                 ON T.link = S.link
-                WHEN NOT MATCHED THEN
-                  INSERT ROW
+                WHEN NOT MATCHED THEN INSERT ROW
                 """
 
-                bq.query(
-                    merge_sql,
-                    location=LOCATION,
-                ).result()
-
-                final_count = bq.get_table(
-                    target
-                ).num_rows
+                bq.query(merge_sql, location=LOCATION).result()
+                total = bq.get_table(target).num_rows
 
                 print(
                     f"{source}: loaded={loaded}, "
-                    f"raw_total={final_count}"
+                    f"raw_total={total}"
                 )
-
-                results[source] = {
-                    "files": len(uris),
-                    "loaded": loaded,
-                    "raw_total": final_count,
-                }
+                return {"source": source, "loaded": loaded}
 
             finally:
-                bq.delete_table(
-                    temp, not_found_ok=True
-                )
+                bq.delete_table(temp, not_found_ok=True)
 
-        return results
+        return load
 
-    # Replaces the Phase 1 tasks refresh_news_staging / refresh_news_mart / verify_news.
-    # Rebuilds staging + mart (incl. fact_player_week headline counts) and runs all dbt tests.
-    dbt_models = DbtTaskGroup(
-        group_id="dbt_models",
-        project_config=PROJECT_CONFIG,
-        profile_config=PROFILE_CONFIG,
-        execution_config=EXECUTION_CONFIG,
-        render_config=RENDER_CONFIG,
-        operator_args={"install_deps": True},
-    )
+    # Runs if at least one source loaded (same rule the old refresh_news_staging used).
+    # Publishes the RAW_NEWS asset -> triggers nfl_dbt_build, which replaces the old
+    # refresh_news_staging / refresh_news_mart / verify_news tasks.
+    @task(trigger_rule="all_done_min_one_success", outlets=[RAW_NEWS])
+    def news_loaded():
+        print("News raw tables updated -> nfl_dbt_build will run")
 
-    load_news_raw() >> dbt_models
+    espn = make_load("espn")(make_trigger("espn")())
+    google = make_load("google")(make_trigger("google")())
+    yahoo = make_load("yahoo")(make_trigger("yahoo")())
+
+    [espn, google, yahoo] >> news_loaded()
 
 
 nfl_daily_news()
