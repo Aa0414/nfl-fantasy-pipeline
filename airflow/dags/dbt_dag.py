@@ -31,6 +31,7 @@ nfl_dbt_build = DbtDag(
     start_date=pendulum.datetime(2026, 11, 1, tz="America/New_York"),
     catchup=False,
     max_active_runs=1,
+    max_active_tasks=1,   # one dbt process at a time (small DEV worker)
     default_args={
         "retries": 1,
         "retry_delay": timedelta(minutes=5),
