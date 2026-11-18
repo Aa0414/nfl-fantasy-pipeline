@@ -1,0 +1,12 @@
+fantasy_dbt:
+  target: prod
+  outputs:
+    prod:
+      type: bigquery
+      method: oauth
+      project: ba882-team03-kalshi
+      dataset: mart
+      location: us-central1
+      threads: 4
+      job_execution_timeout_seconds: 900
+      job_retries: 1

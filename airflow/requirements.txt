@@ -6,3 +6,5 @@ google-cloud-storage
 opentelemetry-api==1.45.1
 opentelemetry-sdk==1.45.1
 google-cloud-bigquery
+
+astronomer-cosmos>=1.16,<2

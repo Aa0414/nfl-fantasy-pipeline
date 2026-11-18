@@ -1,14 +1,15 @@
 from datetime import timedelta
-from pathlib import Path
 from uuid import uuid4
 
 import pendulum
 from airflow.sdk import dag, task, CronTriggerTimetable
+from cosmos import DbtTaskGroup
+
+from dbt_config import EXECUTION_CONFIG, PROFILE_CONFIG, PROJECT_CONFIG, RENDER_CONFIG
 
 PROJECT = "ba882-team03-kalshi"
 BUCKET = "ba882-nfl-kalshi-raw"
 LOCATION = "us-central1"
-SQL_DIR = Path("/usr/local/airflow/include/sql")
 
 SOURCES = {
     "espn": "espn_news_raw",
@@ -33,7 +34,7 @@ SOURCES = {
         "retries": 2,
         "retry_delay": timedelta(minutes=10),
     },
-    tags=["nfl", "news", "bigquery"],
+    tags=["nfl", "news", "bigquery", "dbt"],
 )
 def nfl_daily_news():
 
@@ -165,89 +166,18 @@ def nfl_daily_news():
 
         return results
 
-    @task
-    def refresh_news_staging():
-        from google.cloud import bigquery
+    # Replaces the Phase 1 tasks refresh_news_staging / refresh_news_mart / verify_news.
+    # Rebuilds staging + mart (incl. fact_player_week headline counts) and runs all dbt tests.
+    dbt_models = DbtTaskGroup(
+        group_id="dbt_models",
+        project_config=PROJECT_CONFIG,
+        profile_config=PROFILE_CONFIG,
+        execution_config=EXECUTION_CONFIG,
+        render_config=RENDER_CONFIG,
+        operator_args={"install_deps": True},
+    )
 
-        client = bigquery.Client(
-            project=PROJECT,
-            location=LOCATION,
-        )
-
-        for name in [
-            "00_norm_name.sql",
-            "01_stg_headlines.sql",
-            "02_stg_headline_athlete_tags.sql",
-        ]:
-            path = SQL_DIR / "staging" / name
-
-            print("Running:", name)
-
-            client.query(
-                path.read_text(encoding="utf-8"),
-                location=LOCATION,
-            ).result()
-
-    @task
-    def refresh_news_mart():
-        from google.cloud import bigquery
-
-        client = bigquery.Client(
-            project=PROJECT,
-            location=LOCATION,
-        )
-
-        for name in [
-            "03_fact_headline.sql",
-            "04_bridge_headline_player.sql",
-        ]:
-            path = SQL_DIR / "mart" / name
-
-            print("Running:", name)
-
-            client.query(
-                path.read_text(encoding="utf-8"),
-                location=LOCATION,
-            ).result()
-
-    @task
-    def verify_news():
-        from google.cloud import bigquery
-
-        client = bigquery.Client(
-            project=PROJECT,
-            location=LOCATION,
-        )
-
-        for table in [
-            "staging.stg_headlines",
-            "mart.fact_headline",
-            "mart.bridge_headline_player",
-        ]:
-            query = (
-                f"SELECT COUNT(*) AS n "
-                f"FROM `{PROJECT}.{table}`"
-            )
-
-            count = next(iter(
-                client.query(
-                    query, location=LOCATION
-                ).result()
-            )).n
-
-            print(f"{table}: {count} rows")
-
-            if table != "mart.bridge_headline_player" and count == 0:
-                raise RuntimeError(
-                    f"Empty table: {table}"
-                )
-
-    raw = load_news_raw()
-    staging = refresh_news_staging()
-    mart = refresh_news_mart()
-    verify = verify_news()
-
-    raw >> staging >> mart >> verify
+    load_news_raw() >> dbt_models
 
 
 nfl_daily_news()
