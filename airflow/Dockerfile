@@ -1,4 +1,4 @@
-FROM astrocrpublic.azurecr.io/runtime:3.3-10
+FROM astrocrpublic.azurecr.io/runtime:3.3-12
 
 # dbt lives in its own virtualenv so its packages don't conflict with Airflow's.
 # Cosmos (installed from requirements.txt) calls this dbt executable.
