@@ -1,0 +1,101 @@
+"""
+Sleeper Players Pipeline
+Tuesday and Saturday at 7:30 AM America/New_York.
+Loading raw players publishes the RAW_PLAYERS asset -> triggers nfl_dbt_build
+(replaces the old refresh_players_tables / verify_players tasks).
+"""
+
+import pendulum
+from airflow.sdk import dag, task
+from google.cloud import bigquery, storage
+
+from dbt_config import RAW_PLAYERS
+
+PROJECT = "ba882-team03-kalshi"
+BUCKET = "ba882-nfl-kalshi-raw"
+RAW_TABLE = f"{PROJECT}.raw.players_sleeper_raw"
+
+
+@dag(
+    dag_id="nfl_players",
+    schedule="30 7 * * 2,6",
+    start_date=pendulum.datetime(
+        2026, 10, 1, tz="America/New_York"
+    ),
+    catchup=False,
+    max_active_runs=1,
+    tags=["nfl", "players", "sleeper"],
+)
+def players_pipeline():
+
+    @task(retries=2)
+    def trigger_players():
+        """Trigger Sleeper player ingestion via Cloud Function."""
+        import requests
+        from google.auth.transport.requests import Request
+        from google.oauth2 import id_token
+
+        url = "https://nfl-ingest-cedewu2pea-uc.a.run.app"
+        token = id_token.fetch_id_token(Request(), url)
+
+        response = requests.get(
+            url,
+            params={"job": "players"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=300,
+        )
+        response.raise_for_status()
+        print("Sleeper player ingestion completed")
+
+    @task
+    def find_latest_snapshot():
+        client = storage.Client(project=PROJECT)
+        blobs = client.list_blobs(
+            BUCKET, prefix="players/sleeper/"
+        )
+
+        files = sorted(
+            blob.name
+            for blob in blobs
+            if blob.name.endswith("/players.ndjson")
+        )
+
+        if not files:
+            raise ValueError("No Sleeper snapshot found in GCS")
+
+        return f"gs://{BUCKET}/{files[-1]}"
+
+    @task(outlets=[RAW_PLAYERS])
+    def load_players_raw(gcs_uri):
+        client = bigquery.Client(project=PROJECT)
+
+        # Preserve the existing BigQuery table schema.
+        schema = client.get_table(RAW_TABLE).schema
+
+        config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            schema=schema,
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        )
+
+        job = client.load_table_from_uri(
+            gcs_uri,
+            RAW_TABLE,
+            job_config=config,
+        )
+        job.result()
+
+        count = client.get_table(RAW_TABLE).num_rows
+        if count == 0:
+            raise ValueError(f"Empty table: {RAW_TABLE}")
+        print(f"{RAW_TABLE}: {count} rows")
+        return count
+
+    extraction = trigger_players()
+    snapshot = find_latest_snapshot()
+    loaded = load_players_raw(snapshot)
+
+    extraction >> snapshot >> loaded
+
+
+players_pipeline()
